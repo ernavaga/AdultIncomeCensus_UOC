@@ -1,0 +1,505 @@
+---
+title: 'Tipología y Ciclo de Vida de los Datos: Práctica 2 - Limpieza y análisis de datos'
+author: "Autor: Eréndira Teresa Navarro García"
+date: "Enero 20202"
+output:
+  html_document:
+    highlight: default
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_depth: 2
+  pdf_document:
+    highlight: zenburn
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval=T, echo=T)
+```
+
+En el repositorio https://github.com/ernavaga/AdultIncomeCensus_UOC se encuentra este y el resto de los documentos solicitados
+
+# Descripción del dataset. ¿Por qué es importante y qué pregunta/problema pretende responder?
+
+El conjunto de datos utilizado es Dataset Adult https://archive.ics.uci.edu/ml/datasets/Adult, estos datos provienen del censo de 1994 en Estados Unidos. La extracción fue hecha por Barry Becker, el conjunto de datos ya tiene estos filtros ((AAGE>16) && (AGI>100) && (AFNLWGT>1)&& (HRSWK>0)). Lo que se busca con estos datos es identificar las cractaerísticas que determinan que una persona gane más o menos de 50 mil dólares al año.
+
+# Integración y selección de los datos de interés a analizar.
+
+El conjunto de datos contiene los siguientes campos:
+
+* label: >50K, <=50K (etiqueta).
+* age: continuous (edad).
+* workclass: Private, Self-emp-not-inc, Self-emp-inc, Federal-gov, Local-gov, State-gov, Without-pay, Never-worked (descripción del trabajo).
+* fnlwgt: continuous (ponderador).
+* education: Bachelors, Some-college, 11th, HS-grad, Prof-school, Assoc-acdm, Assoc-voc, 9th, 7th-8th, 12th, Masters, 1st-4th, 10th, Doctorate, 5th-6th, Preschool (último nivel de estudios).
+* education-num: continuous (número de años de estudio).
+* marital-status: Married-civ-spouse, Divorced, Never-married, Separated, Widowed, Married-spouse-absent, Married-AF-spouse (estatus marital).
+* occupation: Tech-support, Craft-repair, Other-service, Sales, Exec-managerial, Prof-specialty, Handlers-cleaners, Machine-op-inspct, Adm-clerical, Farming-fishing, Transport-moving, Priv-house-serv, Protective-serv, Armed-Forces (tipo de ocupación).
+* relationship: Wife, Own-child, Husband, Not-in-family, Other-relative, Unmarried (tipo de relación con las demás personas).
+* race: White, Asian-Pac-Islander, Amer-Indian-Eskimo, Other, Black (raza).
+* sex: Female, Male (sexo).
+* capital-gain: continuous (ganancia de capital).
+* capital-loss: continuous (pérdida de capital).
+* hours-per-week: continuous (horas de trabajo por semana).
+* native-country: United-States, Cambodia, England, Puerto-Rico, Canada, Germany, Outlying-US(Guam-USVI-etc), India, Japan, Greece, South, China, Cuba, Iran, Honduras, Philippines, Italy, Poland, Jamaica, Vietnam, Mexico, Portugal, Ireland, France, Dominican-Republic, Laos, Ecuador, Taiwan, Haiti, Columbia, Hungary, Guatemala, Nicaragua, Scotland, Thailand, Yugoslavia, El-Salvador, Trinadad&Tobago, Peru, Hong, Holand-Netherlands (pais de origen).
+
+Partiendo de la descripción de los datos las variables relationship y marital-status son similares, al igual que education y education-num. Se buscaría categorizar la variables continuas y se excluirá el ponderador.
+
+Lo que se bucaría es obtener modelos supervisados con el target de >50K / <=50K.
+
+# Limpieza de los datos.
+```{r message= FALSE, warning=FALSE,include=FALSE}
+# Asignar directorio
+setwd("/Users/ernavaga/Documents/UOC/Sem 2/Tipología y ciclo de vida de los datos")
+```
+
+> Lectura de dataset
+
+Los datos vienen divididos ya en train y test set, para el tratamiento de los mismos se unirán ambos conjuntos. Se dividirán en variables categóricas y numéricas para su análisis posterior.
+
+```{r message=FALSE, warning=FALSE}
+# Librerías
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(leaps)
+library(Hmisc)
+library(stringr)
+library(C50)
+library(caret)
+library(grid)
+
+# Lectura de datos
+adult_train <- read.csv('http://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data',stringsAsFactors = FALSE, header = FALSE)
+
+adult_test <- read.csv('https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.test',stringsAsFactors = FALSE, header = FALSE,skip=1)
+
+# Nombre de los atributos
+names(adult_train) <- c("age","workclass","fnlwgt","education","education_num","marital_status","occupation","relationship","race","sex","capital_gain","capital_loss","hour_per_week","native_country","target")
+
+names(adult_test) <- c("age","workclass","fnlwgt","education","education_num","marital_status","occupation","relationship","race","sex","capital_gain","capital_loss","hour_per_week","native_country","target")
+
+adult_train["df"] <- "train"
+adult_test["df"] <- "test"
+```
+
+Ambos datasets se unen en uno solo para su tratamiento, se tienen 16 variables con 44,842 registros.
+
+```{r message=FALSE, warning=FALSE}
+adult <- rbind(adult_train,adult_test)
+
+# Verificamos estructura de los conjuntos de datos
+str(adult)
+
+catv <- c("workclass", "education", "marital_status", "occupation", "relationship",
+          "race", "sex", "native_country", "target")
+
+numv <- c("age", "capital_gain", "capital_loss", "hour_per_week")
+```
+
+## ¿Los datos contienen ceros o elementos vacíos? ¿Cómo gestionarías cada uno de estos casos?
+
+Los datos tienen elementos "desconocidos" y están marcados con el símbolo "?", estos datos representan el 6% y están presentes en las variables workclass y occupation, al igual aparece esto en 2% de native-country.
+
+Debido a la naturaleza de los datos, que provienen de un censo, se considera la posibilidad de utilizar la categoria "desconocido" como una categoría en si misma, sobre todo porque se planea agrupar categorias.
+
+> Descriptivos variables categóricas:
+
+```{r message=FALSE, warning=FALSE}
+describe(adult[catv])
+
+dim(adult[adult["native_country"]==" ?",])[1]/dim(adult)[1]
+```
+
+Para las variables numéricas no se observan datos nulos explícitos, pero debido a la distribución se identifica que los casos donde capital_gain=99999 son nulos.
+
+> Descriptivos variables numéricas:
+
+```{r message=FALSE, warning=FALSE}
+########## Descriptivos numéricos
+# librerìa para descriptivos numéricos
+library(psych)
+
+# Descriptivos numéricos
+describe(adult[numv],quant=c(.25,.75))
+
+# --------------- capital_gain ------------------
+# boxplot para verificar el dato 99999
+ggplot(data=adult, aes(y=capital_gain)) + 
+  geom_boxplot()
+
+# Se asume 99999 como valor nulo, debido a su distribución
+nrow(adult[adult$capital_gain==99999,])
+adult[adult$capital_gain == 99999,'capital_gain'] = NA
+```
+
+## Identificación y tratamiento de valores extremos.
+De acuerdo a la planeación, la variables numéricas se categorizarán, esto nos ayudará con los valores extremos presentes sobre todo en la variables de capital.
+
+> Limpieza variables categóricas.
+
+* Eliminar "." de target
+
+```{r message=FALSE, warning=FALSE}
+# Limpiar texto y recategorizar
+
+# --------------- target ------------------
+# Se elimina el "." que está presente en registros del dataset en la variable target
+adult$target <- gsub("[.]", "", trimws(tolower(adult$target)))
+```
+
+* Recategorización workclass
+
+```{r message=FALSE, warning=FALSE}
+# --------------- workclass ------------------
+# muestra diferentes etiquetas -- INICIO
+levels(as.factor(adult$workclass))
+# Distribución inicial
+ggplot(data=adult,aes(x=workclass)) + geom_bar()
+
+# Estos valores se agrupan en 4 categorias generales: gov, priv, self y other
+adult$workclass[grepl("gov",trimws(adult$workclass),ignore.case = T)] <- 'gov'
+adult$workclass[grepl("self",trimws(adult$workclass),ignore.case = T)] <- 'self'
+adult$workclass[grepl("(\\?|without|never)",
+                      trimws(adult$workclass),ignore.case = T)] <- 'other'
+adult$workclass[grepl("priv",trimws(adult$workclass),ignore.case = T)] <- 'priv'
+
+#Verificar missing values
+adult[is.na(adult$workclass)==TRUE,'workclass']
+
+# diferentes etiquetas -- FIN
+levels(as.factor(adult$workclass))
+
+# Distribución final
+ggplot(data=adult,aes(x=workclass)) + geom_bar()
+```
+
+* Recategorización education
+
+```{r message=FALSE, warning=FALSE}
+# --------------- education ------------------
+# diferentes etiquetas INCIO
+levels(as.factor(adult$education))
+
+# Distribución inicial
+ggplot(data=adult,aes(x=education)) + geom_bar()
+
+# Estos valores se pueden agrupar en 5 categorias: no terminado, asociados, high school, bachelor y avanzado
+adult$education[grepl("(th|preschool)",trimws(adult$education),ignore.case = T)] <- 'dropout'
+adult$education[grepl("assoc",trimws(adult$education),ignore.case = T)] <- 'associates'
+adult$education[grepl("(hs-|college)",trimws(adult$education),ignore.case = T)] <- 'hs_graduate'
+adult$education[grepl("(prof|master|docto)",trimws(adult$education),ignore.case = T)] <- 'advanced'
+# minúsculas, sin espacios
+adult$education <- trimws(tolower(adult$education))
+
+# diferentes etiquetas FINAL
+levels(as.factor(adult$education))
+
+# Distribución final
+ggplot(data=adult,aes(x=education)) + geom_bar()
+```
+
+* Recategorización marital status
+
+```{r message=FALSE, warning=FALSE}
+# --------------- marital estatus ------------------
+# diferentes etiquetas
+levels(as.factor(adult$marital_status))
+
+# Distribución inicial
+ggplot(data=adult,aes(x=marital_status)) + geom_bar()
+
+# Estos valores se pueden agrupar en 3 categorias: casados, sin pareja y solteros
+adult$marital_status[grepl("^married",trimws(adult$marital_status),
+                           ignore.case = T)] <- 'marrried'
+adult$marital_status[grepl("(separa|divorced|wido|never)",trimws(adult$marital_status),
+                           ignore.case = T)] <- 'single'
+
+# Distribución final
+ggplot(data=adult,aes(x=marital_status)) + geom_bar()
+```
+
+* Recategorización occupation
+
+```{r message=FALSE, warning=FALSE}
+# --------------- occupation ------------------
+# diferentes etiquetas
+levels(as.factor(adult$occupation))
+
+# Distribución inicial
+ggplot(data=adult,aes(x=occupation)) + geom_bar()
+
+# Estos valores se pueden agrupar en 6 categorias: servicios, otros servicios, profesionales, ecelsiásticos, desconocidos, trabajo manual
+adult$occupation[grepl("(transp|tech|protect|priv|other|armed|sales)",
+                       trimws(adult$occupation), ignore.case = T)] <- 'serv'
+adult$occupation[grepl("(exec|prof)",trimws(adult$occupation),
+                       ignore.case = T)] <- 'professional'
+adult$occupation[grepl("(craft|farm|hand|inspct|cleric)",trimws(adult$occupation),
+                       ignore.case = T)] <- 'manual'
+adult$occupation[grepl("\\?",trimws(adult$occupation),ignore.case = T)] <- 'unknown'
+# cambiar guión medio por guión bajo
+adult$occupation <- gsub("-", "_", adult$occupation)
+# minúsculas, sin espacios
+adult$occupation <- trimws(tolower(adult$occupation))
+
+# Distribución final
+ggplot(data=adult,aes(x=occupation)) + geom_bar()
+```
+
+* Recategorización race
+
+```{r message=FALSE, warning=FALSE}
+# --------------- race ------------------
+# diferentes etiquetas
+levels(as.factor(adult$race))
+
+# Distribución inicial
+ggplot(data=adult,aes(x=race)) + geom_bar()
+
+# Se agrupan otras razas diferentes a white y black en una categoría
+adult$race[!grepl("(white|black)",trimws(adult$race),ignore.case = T)] <- 'other'
+# minúsculas, sin espacios
+adult$race <- trimws(tolower(adult$race))
+
+# Distribución final
+ggplot(data=adult,aes(x=race)) + geom_bar()
+```
+
+* Sex
+
+```{r message=FALSE, warning=FALSE}
+# --------------- sex ------------------
+# diferentes etiquetas
+levels(as.factor(adult$sex))
+# minúsculas, sin espacios
+adult$sex <- trimws(tolower(adult$sex))
+
+# Distribución 
+ggplot(data=adult,aes(x=sex,)) + geom_bar()
+```
+
+* Recategorización native country
+
+```{r message=FALSE, warning=FALSE}
+# --------------- native country ------------------
+# diferentes etiquetas
+levels(as.factor(adult$native_country))
+
+# Distribución inicial
+ggplot(data=adult,aes(x=native_country)) + geom_bar()
+
+# se agrupan países diferentes a USA en una categoría
+adult$native_country[!grepl("(united)",trimws(adult$native_country),
+                            ignore.case = T)] <- 'other_unknown'
+# guión bajo en lugar de medio y minúsculas, sin espacios
+adult$native_country <-trimws(tolower(gsub("-", "_", adult$native_country)))
+
+# Distribución final
+ggplot(data=adult,aes(x=native_country)) + geom_bar()
+```
+
+* Categorización edad
+
+```{r message=FALSE, warning=FALSE}
+# --------------- age ------------------
+# Se agrupa en rangos de edad
+library(arules)
+adult$age_r <- discretize(adult$age, method = "interval", breaks = 6,
+                          labels = c("<29", "29-41", "42-53","54-66","66-78",">=79"))
+
+# Distribución 
+plot1 <- ggplot(data=adult, aes(x=age)) + 
+  geom_density(adjust=1.5, alpha=.4)
+plot2 <- ggplot(data = adult,aes(x=age)) + geom_bar()
+plot3 <- ggplot(data=adult, aes(y=age)) + 
+  geom_boxplot() + scale_fill_brewer(palette="Set3")
+plot4 <- ggplot(data = adult,aes(x=age_r)) + geom_bar() +
+  scale_fill_brewer(palette="Set3") +
+  theme(axis.text.x = element_text(angle = 35))
+grid.arrange(plot1, plot2, plot3, plot4, ncol=2)
+```
+
+* Para el capital de los censados, se crea una nueva variable para obtener el valor neto (ganancias - pérdidas), este último se categoriza.
+
+```{r message=FALSE, warning=FALSE}
+
+# se establece una nueva variable que combine capital loss y capital_gain
+adult$capital_net <- adult$capital_gain-adult$capital_loss
+
+# resumen estadístico de capital_net
+describe(adult$capital_net)
+
+# Se categoriza esta nueva variable
+adult$capital_net_r <- cut(adult$capital_net, c(-900000000,-0.0001,0.0001,9000000000), 
+                                labels = c("loss", "null", "gain"), ordered=TRUE)
+adult$capital_net_r = as.character(adult$capital_net_r)
+adult$capital_net_r[is.na(adult$capital_net)] <- "unknown"
+
+# Distribución final en relación a variable target
+p1 <- ggplot(data=adult, aes(x=capital_net)) + 
+  geom_density(adjust=1.5, alpha=.4)
+p3 <- ggplot(data=adult, aes(y=capital_net)) + 
+  geom_boxplot()
+p4 <- ggplot(data = adult,aes(x=capital_net_r)) + 
+  geom_bar()
+grid.arrange(p1, p3, p4, ncol=2)
+```
+
+* Categorización horas trabajadas por semana
+
+```{r message=FALSE, warning=FALSE}
+# --------------- hour per week ------------------
+# categorización de la variable con base en lo anterior
+adult$hour_per_week_r <- discretize(adult$hour_per_week, 
+                                    method = "interval", breaks = 4,
+                                    labels = c("<25","26-50","51-75",">=76"))
+
+# Distribución final en relación a variable target
+p1 <- ggplot(data= adult, aes(x=hour_per_week)) + 
+  geom_density(adjust=1.5, alpha=.4)
+p2 <- ggplot(data = adult,aes(x=hour_per_week)) + geom_bar()
+p3 <- ggplot(data= adult, aes(y=hour_per_week,)) + 
+  geom_boxplot()
+p4 <- ggplot(data = adult,aes(x=hour_per_week_r)) + 
+  geom_bar() 
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+# Análisis de los datos.
+## Selección de los grupos de datos que se quieren analizar/comparar (planificación de los análisis a aplicar).
+Se utilizarán las variables categóricas que se han formulado y/o recategrizado, con estas variables se estudiará el poder predictivo que tengan, además de la correlación entre variables categóricas. Adicionalmente se observará visualmente el comportamiento de cada una de las variables con la variable target.
+
+## Comprobación de la normalidad y homogeneidad de la varianza.
+Para este caso en particular, las variables numericas que existian se transofrmaton en categóricas por lo que las pruebas de normalidad y homogeneidad carecen de sentido.
+
+## Aplicación de pruebas estadísticas para comparar los grupos de datos. En función de los datos y el objetivo del estudio, aplicar pruebas de contraste de hipótesis, correlaciones, regresiones, etc. Aplicar al menos tres métodos de análisis diferentes.
+
+Por medio de las correlaciones, no se observa relación significativa entre occupation, workclass, race.
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+cat <- c("workclass","education","marital_status","occupation" ,"race","sex","native_country","target","age_r","capital_net_r","hour_per_week_r")
+
+# Posibles combinaciones de variables categóricas
+combinaciones     <- as.data.frame(t(combn(cat, 2)))
+
+# Prueba Chi-Square pata categóricas
+chisq_prueba <- 
+  apply(t(combinaciones), 2, function(x){
+                           c(Var1   = x[1], 
+                             Var2   = x[2], 
+                             pvalue = chisq.test(adult[, x[1]], 
+                                                 adult[, x[2]])$p.value)
+  })
+
+chisq_prueba <- chisq_prueba %>% 
+  t() %>% 
+  data.frame(stringsAsFactors=FALSE) 
+
+chisq_prueba$pvalue <- as.numeric(chisq_prueba$pvalue)
+
+chisq_prueba<- chisq_prueba%>% 
+  arrange(pvalue) 
+
+knitr::kable(chisq_prueba, caption = "Tabla de correlaciones --categóricas-- ", 
+             format = "markdown", padding = 0,
+             col.names = c("", "", "p-value"))
+```
+
+Dentro de la prueba para identificar el valor predictivo, se observa que education, marital_status, age, capital neto y hours per week son las variables elegidas.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# modelo de búsqueda
+adult[cat] = as.data.frame(apply(adult[cat],2, 
+                                         function(x) as.factor(x)))
+
+search_output<-regsubsets(target~workclass+education+marital_status+occupation+race+sex+native_country+age_r+capital_net_r+hour_per_week_r,
+                          data=adult, method="exhaustive")
+plot(search_output, scale = "adjr2", main = "Adjusted R^2")
+
+cols_1 <- c("education","marital_status","age_r","hour_per_week_r",
+            "capital_net_r","target")
+cols_2 <- c("education","marital_status","age_r","hour_per_week_r",
+            "capital_net_r")
+```
+
+Con el objetivo de tener los datos finales solicitados, se exporta este conjunto de datos.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Export data a csv
+write.csv(adult, "adult_data.csv")
+```
+
+Se utilizan los datos finales para elaborar un árbol de decisión que nos ayude en el predicción del ingreso.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# train data set
+train <- adult[adult["df"]=="train",cols_1]
+trainX <- train[cols_2]
+trainy <- train$target
+
+# test data set
+test <- adult[adult["df"]=="test",cols_1]
+testX <- test[cols_2]
+testy <- test$target
+
+#C5.o model
+model <- C50::C5.0(trainX, trainy,rules=TRUE )
+summary(model)
+
+model_t <- C50::C5.0(trainX, trainy)
+summary(model_t)
+```
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+plot(model_t, gp = gpar(fontsize = 4))
+model_t_pred<-predict(model_t,newdata =testX,type="class")
+confusionMatrix(model_t_pred,testy)
+```
+
+# Representación de los resultados a partir de tablas y gráficas.
+
+Transformación y limpieza variables categóricas.
+
+```{r message=FALSE, warning=FALSE}
+
+# Distribución final en relación a variable target
+p1 = ggplot(data=adult,aes(x=education,fill=target)) + geom_bar() + 
+  scale_fill_brewer(palette="Set3")
+p2 = ggplot(data = adult,aes(x=education,fill=target)) + geom_bar(position="fill") + 
+  scale_fill_brewer(palette="Set3")
+p3 = ggplot(data=adult,aes(x=marital_status,fill=target)) + geom_bar() + 
+  scale_fill_brewer(palette="Set3")
+p4 = ggplot(data = adult,aes(x=marital_status,fill=target)) + 
+  geom_bar(position="fill") + 
+  scale_fill_brewer(palette="Set3")
+grid.arrange(p1,p2,p3,p4, ncol =2)
+
+p5 = ggplot(data=adult,aes(x=age_r,fill=target)) + geom_bar() + 
+  scale_fill_brewer(palette="Set3")
+p6 = ggplot(data = adult,aes(x=age_r,fill=target)) + geom_bar(position="fill") + 
+  scale_fill_brewer(palette="Set3")
+p7 = ggplot(data=adult,aes(x=hour_per_week_r,fill=target)) + geom_bar() + 
+  scale_fill_brewer(palette="Set3")
+p8 = ggplot(data = adult,aes(x=hour_per_week_r,fill=target)) + 
+  geom_bar(position="fill") + 
+  scale_fill_brewer(palette="Set3")
+grid.arrange(p1,p2,p3,p4, ncol =2)
+
+p9 = ggplot(data=adult,aes(x=capital_net_r,fill=target)) + geom_bar() + 
+  scale_fill_brewer(palette="Set3")
+p10 = ggplot(data = adult,aes(x=capital_net_r,fill=target)) + 
+  geom_bar(position="fill") + 
+  scale_fill_brewer(palette="Set3")
+grid.arrange(p9,p10, ncol =2)
+````
+
+# Resolución del problema. A partir de los resultados obtenidos, ¿cuáles son las conclusiones? ¿Los resultados permiten responder al problema?
+
+Con base en el análisis previo y el modelo ejectado, se concluye que los factores que intervienen en el ingreso de los individuo son: el nivel educativo, horas trabajadas, estatus civil y edad. Estas variables ofrecen el mejor rendimiento predictivo dentro de las que ofrece este dataset.
+
+# Código: Hay que adjuntar el código, preferiblemente en R, con el que se ha realizado la limpieza, análisis y representación de los datos. Si lo preferís, también podéis trabajar en Python.
+
+El código se encuentra integrado en el informe.
+
+***Este trabajo se realizó de manera individual, por esta razón se omite la tabla solicitada ETNG***
+
+
